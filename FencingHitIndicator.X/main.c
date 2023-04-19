@@ -103,10 +103,17 @@
 #define LOCKOUT_TIME 300
 
 // Amount of time in msec that buzzer should sound when hit is registered
-#define BUZZER_TIME 2000
+#define BUZZER_TIME 1500
 
 // Amount of additional time in msec that LEDs should stay on after buzzer has stopped sounding
-#define ADDL_LIGHT_TIME 2000
+#define ADDL_LIGHT_TIME 1000
+
+// If a hit is detected within this many ms after the last hit, count it as possibly being due to a disconnected foil
+#define DISCONNECT_DETECT_TIME 500
+
+// If this many "hits" are detected in rapid succession, assume that one or both foils are disconnected
+// Minimum is 2
+#define DISCONNECT_DETECT_COUNT 3
 
 // The time stamps (in ms) at which the fencer's hit was first detected
 // This condition must persist for MIN_HIT_TIME ms to be considered a valid hit
@@ -116,6 +123,26 @@ uint16_t green_start_timestamp;
 // The time stamp (in ms) when the first hit was registered
 // No hits can be registered LOCKOUT_TIME ms after the first hit
 uint16_t lockout_start_timestamp;
+
+// The time stamp (in ms) when the state was last reset. This is used
+// to determine if the buzzer has been sounding continuously due to one
+// or both foils being disconnected and disable it until a valid hit
+// is recorded
+uint16_t last_reset_timestamp;
+
+// The timestamp when the READY state was entered, used to determine when
+// a disconnect condition has been cleared
+uint16_t ready_timestamp;
+
+// This is the number of times that a "hit" has been detected in rapid succession. If
+// this is larger than DISCONNECT_DETECT_COUNT, it means one or both foils are probably
+// disconnected.
+uint8_t consecutive_activations;
+
+// TRUE if buzzer is armed (i.e., both foils are connected and hits are
+// valid). FALSE if the buzzer has been counding continuously due to one
+// or both foils beind disconnected.
+uint8_t buzzer_armed;
 
 // State variable for finite state machine in main loop
 uint8_t state;
@@ -195,10 +222,16 @@ void main(void) {
     init_system();
     
     state = STATE_RESET;
+    buzzer_armed = TRUE;
+    last_reset_timestamp = 0;
+    consecutive_activations = 0;
 
     while (1) {
         switch (state) {
-            case STATE_RESET:
+            case STATE_RESET:            
+                // Record timestamp for disconnect detection
+                last_reset_timestamp = ticks;
+                
                 // Turn off LEDs
                 RED_LED = 0;
                 GREEN_LED = 0;
@@ -214,9 +247,18 @@ void main(void) {
                 green_pending = FALSE;
                 lockout_pending = FALSE;
 
+                ready_timestamp = ticks;
                 state = STATE_READY;
                 break;
             case STATE_READY:
+                // Check to see if buzzer should be rearmed (i.e., disconnect condition is cleared)
+                if (!buzzer_armed) {
+                    if (ticks - ready_timestamp > DISCONNECT_DETECT_TIME) {
+                        buzzer_armed = TRUE;
+                        consecutive_activations = 0;
+                    }
+                }
+                
                 if (RED_FOIL) {
                     // If tip is depressed...
                     if (red_pending) {
@@ -229,7 +271,9 @@ void main(void) {
                                 lockout_pending = TRUE;
                             }
                             RED_LED = 1; // Light up red LED
-                            BUZZER = 1; // Sound buzzer
+                            if (buzzer_armed) {
+                                BUZZER = 1; // Sound buzzer if armed
+                            }
                         }
                     } else {
                         // If this is the first moment that the tip has been depressed,
@@ -255,7 +299,9 @@ void main(void) {
                                 lockout_pending = TRUE;
                             }
                             GREEN_LED = 1; // Light up green LED
-                            BUZZER = 1; // Sound buzzer
+                            if (buzzer_armed) {
+                                BUZZER = 1; // Sound buzzer if armed
+                            }
                         }
                     } else {
                         // If this is the first moment that the tip has been depressed,
@@ -276,6 +322,16 @@ void main(void) {
                 }
                 break;
             case STATE_LOCKOUT:
+                 // Check for multiple activations in rapid succession which can indicate a disconnected foil
+                if (ticks - last_reset_timestamp < DISCONNECT_DETECT_TIME) {
+                    consecutive_activations++;
+                    
+                    // Subtract 2 as workaround for the way consecutive activations are counted
+                    if (consecutive_activations > DISCONNECT_DETECT_COUNT - 2) {
+                        buzzer_armed = FALSE;
+                    }
+                }
+                
                 // Allow buzzer to sound for BUZZER_TIME ms, keep LEDs on for
                 // additional ADD_LIGHT_TIME ms after that
                 delay_ms(BUZZER_TIME);
