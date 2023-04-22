@@ -106,7 +106,7 @@
 #define BUZZER_TIME 1500
 
 // Amount of additional time in msec that LEDs should stay on after buzzer has stopped sounding
-#define ADDL_LIGHT_TIME 1000
+#define ADDL_LIGHT_TIME 1500
 
 // If a hit is detected within this many ms after the last hit, count it as possibly being due to a disconnected foil
 #define DISCONNECT_DETECT_TIME 500
